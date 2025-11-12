@@ -22,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -63,10 +64,21 @@ fun AllergyOCRApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // --- Terms state (persisted via DataStore) ---
     var terms by remember { mutableStateOf(setOf<String>()) }
     LaunchedEffect(Unit) { TermStore.termsFlow(context).collectLatest { terms = it } }
-    var newTerm by remember { mutableStateOf("") }
 
+    // Text-based editor (one term per line)
+    var termsText by remember { mutableStateOf("") }
+    var termsLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(terms) {
+        if (!termsLoaded) {
+            termsText = terms.joinToString("\n")
+            termsLoaded = true
+        }
+    }
+
+    // --- OCR state ---
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var recognized by remember { mutableStateOf<Text?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
@@ -132,41 +144,44 @@ fun AllergyOCRApp() {
                     .padding(12.dp)
                     .fillMaxSize()
             ) {
-                // ---- Terms editor ----
-                Text("Search terms", style = MaterialTheme.typography.titleMedium)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        modifier = Modifier.weight(1f),
-                        value = newTerm,
-                        onValueChange = { newTerm = it },
-                        label = { Text("Add term (e.g., “barley flour”)") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            val t = newTerm.trim()
-                            if (t.isNotEmpty()) {
-                                val updated = (terms + t).toSet()
-                                scope.launch { TermStore.saveTerms(context, updated) }
-                                newTerm = ""
-                            }
-                        })
-                    )
+                // ---- Text-based terms editor ----
+                Text("Allergy terms (one per line)", style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp),
+                    value = termsText,
+                    onValueChange = { termsText = it },
+                    placeholder = { Text("barley\nbarley flour\nmalted barley\nbeer") },
+                    singleLine = false,
+                    minLines = 5,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                    keyboardActions = KeyboardActions.Default
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Button(onClick = {
-                        val t = newTerm.trim()
-                        if (t.isNotEmpty()) {
-                            val updated = (terms + t).toSet()
-                            scope.launch { TermStore.saveTerms(context, updated) }
-                            newTerm = ""
-                        }
-                    }) { Text("Add") }
+                        val updated = termsText
+                            .lines()
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .toSet()
+                        scope.launch { TermStore.saveTerms(context, updated) }
+                    }) { Text("Save terms") }
+
+                    OutlinedButton(onClick = {
+                        termsText = ""
+                        scope.launch { TermStore.saveTerms(context, emptySet()) }
+                    }) { Text("Clear all") }
                 }
-                Spacer(Modifier.height(6.dp))
-                FlowList(terms = terms)
 
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
-                        // Photo Picker requires a request object
                         pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     }) { Text("Pick photo") }
 
@@ -197,11 +212,20 @@ fun AllergyOCRApp() {
                 }
                 errorMessage?.let { Text("Error: $it", color = Color(0xFFD32F2F)) }
 
+                // ---- Results summary + highlighted text ----
                 recognized?.let { text ->
                     val recognizedStr = text.text
-                    val highlighted = remember(recognizedStr, terms) {
-                        buildHighlighted(recognizedStr, terms)
+                    val currentTerms = remember(termsText) {
+                        termsText.lines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
                     }
+                    val (highlighted, matchCount) = remember(recognizedStr, currentTerms) {
+                        highlightAndCount(recognizedStr, currentTerms)
+                    }
+
+                    // Summary line (requested)
+                    val summary = if (matchCount > 0) "Matches found: $matchCount" else "No matches"
+                    Text(summary, style = MaterialTheme.typography.titleSmall)
+
                     Text(
                         highlighted,
                         modifier = Modifier
@@ -213,7 +237,8 @@ fun AllergyOCRApp() {
                             .padding(12.dp)
                     )
                 } ?: Text(
-                    "Pick or take a photo of the ingredients list. We'll OCR the text and highlight matches.",
+                    "Pick or take a photo of the ingredients list. We'll OCR the text and highlight matches.\n" +
+                    "Edit your terms above; save to persist.",
                     color = Color.Gray
                 )
             }
@@ -221,41 +246,31 @@ fun AllergyOCRApp() {
     }
 }
 
-@Composable
-fun FlowList(terms: Set<String>) {
-    val chips = terms.sortedBy { it.lowercase() }
-    Column {
-        Row(Modifier.fillMaxWidth()) {
-            chips.forEach { term ->
-                AssistChip(
-                    onClick = {},
-                    label = { Text(term) },
-                    modifier = Modifier.padding(end = 8.dp, bottom = 8.dp),
-                    enabled = false
-                )
-            }
-        }
-    }
-}
-
-private fun buildHighlighted(text: String, terms: Set<String>) = buildAnnotatedString {
+// Build highlighted text and return total match count
+private fun highlightAndCount(text: String, terms: Set<String>): Pair<AnnotatedString, Int> {
     val escaped = terms.filter { it.isNotBlank() }
         .sortedByDescending { it.length }
         .joinToString("|") { Regex.escape(it) }
-    if (escaped.isBlank()) { append(text); return@buildAnnotatedString }
-    val regex = Regex(escaped, RegexOption.IGNORE_CASE)
 
+    if (escaped.isBlank()) return AnnotatedString(text) to 0
+
+    val regex = Regex(escaped, RegexOption.IGNORE_CASE)
     var last = 0
-    for (m in regex.findAll(text)) {
-        val start = m.range.first
-        val end = m.range.last + 1
-        if (start > last) append(text.substring(last, start))
-        withStyle(SpanStyle(background = Color.Yellow, fontWeight = FontWeight.SemiBold)) {
-            append(text.substring(start, end))
+    var count = 0
+    val out = buildAnnotatedString {
+        for (m in regex.findAll(text)) {
+            val start = m.range.first
+            val end = m.range.last + 1
+            if (start > last) append(text.substring(last, start))
+            withStyle(SpanStyle(background = Color.Yellow, fontWeight = FontWeight.SemiBold)) {
+                append(text.substring(start, end))
+            }
+            last = end
+            count++
         }
-        last = end
+        if (last < text.length) append(text.substring(last))
     }
-    if (last < text.length) append(text.substring(last))
+    return out to count
 }
 
 private fun runOcr(
