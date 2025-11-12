@@ -1,13 +1,16 @@
 package com.example.allergyscan
 
-import android.content.ContentValues
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.example.allergyscan.data.TermStore
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
@@ -32,15 +37,18 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import java.time.Instant
-import androidx.activity.result.PickVisualMediaRequest
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
-import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import java.io.File
 
+// ---- File-scope helper: create a FileProvider-backed temp photo URI ----
+fun createTempImageUri(context: Context): Uri {
+    val dir = File(context.cacheDir, "images").apply { mkdirs() }
+    val file = File.createTempFile("capture_", ".jpg", dir)
+    return FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,20 +72,23 @@ fun AllergyOCRApp() {
     var isProcessing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    // ---- Pick from gallery (Photo Picker) ----
     val pickImage = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
             if (uri != null) {
                 selectedImageUri = uri
-                runOcr(uri, onStart = { isProcessing = true; errorMessage = null }, onDone = {
-                    isProcessing = false; recognized = it
-                }, onError = { e ->
-                    isProcessing = false; errorMessage = e.message
-                })
+                runOcr(
+                    uri,
+                    onStart = { isProcessing = true; errorMessage = null },
+                    onDone = { isProcessing = false; recognized = it },
+                    onError = { e -> isProcessing = false; errorMessage = e.message }
+                )
             }
         }
     )
 
+    // ---- Take picture (to our FileProvider URI) ----
     var tempCaptureUri by remember { mutableStateOf<Uri?>(null) }
     val takePicture = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture(),
@@ -85,48 +96,34 @@ fun AllergyOCRApp() {
             if (ok && tempCaptureUri != null) {
                 val uri = tempCaptureUri!!
                 selectedImageUri = uri
-                runOcr(uri, onStart = { isProcessing = true; errorMessage = null }, onDone = {
-                    isProcessing = false; recognized = it
-                }, onError = { e ->
-                    isProcessing = false; errorMessage = e.message
-                })
+                runOcr(
+                    uri,
+                    onStart = { isProcessing = true; errorMessage = null },
+                    onDone = { isProcessing = false; recognized = it },
+                    onError = { e -> isProcessing = false; errorMessage = e.message }
+                )
             }
         }
     )
-val requestCameraPermission = rememberLauncherForActivityResult(
-    contract = RequestPermission(),
-    onResult = { granted ->
-        if (granted) {
-            val uri = createTempImageUri(context)
-            tempCaptureUri = uri
-            takePicture.launch(uri)
-        } else {
-            errorMessage = "Camera permission denied."
-        }
-    }
-)
 
-    fun createImageUri(): Uri? {
-        val resolver = context.contentResolver
-        val name = "allergy_ocr_${Instant.now().toEpochMilli()}.jpg"
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, name)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+    // ---- Runtime CAMERA permission ----
+    val requestCameraPermission = rememberLauncherForActivityResult(
+        contract = RequestPermission(),
+        onResult = { granted ->
+            if (granted) {
+                try {
+                    val uri = createTempImageUri(context)
+                    tempCaptureUri = uri
+                    takePicture.launch(uri)
+                } catch (e: Exception) {
+                    errorMessage = "Could not prepare camera destination: ${e.localizedMessage}"
+                }
+            } else {
+                errorMessage = "Camera permission denied."
+            }
         }
-        return resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-    }
-
-private fun createTempImageUri(context: android.content.Context): Uri {
-    val dir = File(context.cacheDir, "images").apply { mkdirs() }
-    val file = File.createTempFile("capture_", ".jpg", dir)
-    return FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        file
     )
-}
 
-    
     MaterialTheme {
         Scaffold(topBar = { TopAppBar(title = { Text("Allergy OCR (Prototype)") }) }) { padding ->
             Column(
@@ -135,6 +132,7 @@ private fun createTempImageUri(context: android.content.Context): Uri {
                     .padding(12.dp)
                     .fillMaxSize()
             ) {
+                // ---- Terms editor ----
                 Text("Search terms", style = MaterialTheme.typography.titleMedium)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
@@ -163,26 +161,31 @@ private fun createTempImageUri(context: android.content.Context): Uri {
                     }) { Text("Add") }
                 }
                 Spacer(Modifier.height(6.dp))
-
-                // Show terms list
                 FlowList(terms = terms)
 
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
-    val camPerm = Manifest.permission.CAMERA
-    val granted = ContextCompat.checkSelfPermission(context, camPerm) == PackageManager.PERMISSION_GRANTED
-    if (granted) {
-        val uri = createTempImageUri(context)
-        tempCaptureUri = uri
-        takePicture.launch(uri)
-    } else {
-        requestCameraPermission.launch(camPerm)
-    }
-}) {
-    Text("Take photo")
-}
+                        // Photo Picker requires a request object
+                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    }) { Text("Pick photo") }
 
+                    Button(onClick = {
+                        val camPerm = Manifest.permission.CAMERA
+                        val granted = ContextCompat.checkSelfPermission(context, camPerm) ==
+                                PackageManager.PERMISSION_GRANTED
+                        if (granted) {
+                            try {
+                                val uri = createTempImageUri(context)
+                                tempCaptureUri = uri
+                                takePicture.launch(uri)
+                            } catch (e: Exception) {
+                                errorMessage = "Could not prepare camera destination: ${e.localizedMessage}"
+                            }
+                        } else {
+                            requestCameraPermission.launch(camPerm)
+                        }
+                    }) { Text("Take photo") }
                 }
 
                 Spacer(Modifier.height(12.dp))
@@ -192,7 +195,7 @@ private fun createTempImageUri(context: android.content.Context): Uri {
                     Spacer(Modifier.height(8.dp))
                     Text("Processing…")
                 }
-                errorMessage?.let { Text("Error: " + it, color = Color(0xFFD32F2F)) }
+                errorMessage?.let { Text("Error: $it", color = Color(0xFFD32F2F)) }
 
                 recognized?.let { text ->
                     val recognizedStr = text.text
@@ -273,6 +276,7 @@ private fun runOcr(
     }
 }
 
+// Application class so we have a safe Context for ML Kit file loading
 class App : android.app.Application() {
     override fun onCreate() {
         super.onCreate()
