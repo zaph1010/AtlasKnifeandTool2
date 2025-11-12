@@ -67,22 +67,21 @@ fun AllergenOCRApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // --- Terms state (persisted via DataStore) ---
+    // --- Persisted terms (source of truth) ---
     var terms by remember { mutableStateOf(setOf<String>()) }
-    LaunchedEffect(Unit) { TermStore.termsFlow(context).collectLatest { terms = it } }
-
-    // Text-based editor (one term per line)
-    var termsText by remember { mutableStateOf("") }
-    var termsLoaded by remember { mutableStateOf(false) }
-    LaunchedEffect(terms) {
-        if (!termsLoaded) {
-            termsText = terms.joinToString("\n")
-            termsLoaded = true
+    LaunchedEffect(Unit) {
+        TermStore.termsFlow(context).collectLatest { loaded ->
+            terms = loaded
         }
     }
 
+    // Text editor mirrors persisted terms
+    var termsText by remember { mutableStateOf("") }
+    LaunchedEffect(terms) {                  // <-- sync editor whenever persisted terms change
+        termsText = terms.joinToString("\n")
+    }
+
     // --- OCR/UI state ---
-    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var recognized by remember { mutableStateOf<Text?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -92,7 +91,6 @@ fun AllergenOCRApp() {
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
             if (uri != null) {
-                selectedImageUri = uri
                 runOcr(
                     uri,
                     onStart = { isProcessing = true; errorMessage = null },
@@ -110,7 +108,6 @@ fun AllergenOCRApp() {
         onResult = { ok ->
             if (ok && tempCaptureUri != null) {
                 val uri = tempCaptureUri!!
-                selectedImageUri = uri
                 runOcr(
                     uri,
                     onStart = { isProcessing = true; errorMessage = null },
@@ -181,21 +178,19 @@ fun AllergenOCRApp() {
                         .padding(top = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                   Button(onClick = {
-    val updated = termsText
-        .lines()
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .toSet()
-    // Update UI immediately
-    terms = updated
-    // Persist
-    scope.launch { TermStore.saveTerms(context, updated) }
-}) { Text("Save terms") }
-
+                    Button(onClick = {
+                        val updated = termsText
+                            .lines()
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .toSet()
+                        terms = updated                         // update UI immediately
+                        scope.launch { TermStore.saveTerms(context, updated) }  // persist
+                    }) { Text("Save terms") }
 
                     OutlinedButton(onClick = {
                         termsText = ""
+                        terms = emptySet()
                         scope.launch { TermStore.saveTerms(context, emptySet()) }
                     }) { Text("Clear all") }
                 }
@@ -239,12 +234,8 @@ fun AllergenOCRApp() {
                 recognized?.let { text ->
                     val recognizedStr = text.text
 
-                    // Build current term set from the editor
-                    val currentTerms = remember(termsText) {
-                        termsText.lines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-                    }
-
-                    // Build regex for all terms (case-insensitive)
+                    // Build regex from PERSISTED terms (not the editor text)
+                    val currentTerms = terms
                     val regex = remember(currentTerms) {
                         val escaped = currentTerms
                             .filter { it.isNotBlank() }
@@ -253,10 +244,9 @@ fun AllergenOCRApp() {
                         if (escaped.isBlank()) null else Regex(escaped, RegexOption.IGNORE_CASE)
                     }
 
-                    // Split into lines for easier navigation/highlighting
                     val lines = remember(recognizedStr) { recognizedStr.lines() }
 
-                    // Precompute all match positions and line indices
+                    // Precompute matches across the whole text
                     val matchPositions = remember(recognizedStr, regex) {
                         if (regex == null) emptyList()
                         else regex.findAll(recognizedStr).map { it.range.first }.toList()
@@ -279,7 +269,6 @@ fun AllergenOCRApp() {
                     // Navigation state
                     val listState = rememberLazyListState()
                     var currentMatchIdx by remember { mutableStateOf(0) }
-                    // Reset to first match when new text or terms
                     LaunchedEffect(recognizedStr, currentTerms) { currentMatchIdx = 0 }
 
                     // Summary + Nav Buttons
@@ -288,8 +277,7 @@ fun AllergenOCRApp() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            if (matchCount > 0) "Matches found: $matchCount"
-                            else "No matches",
+                            if (matchCount > 0) "Matches found: $matchCount" else "No matches",
                             style = MaterialTheme.typography.titleSmall
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -298,9 +286,14 @@ fun AllergenOCRApp() {
                                 onClick = {
                                     if (hasMatches) {
                                         currentMatchIdx = 0
-                                        scope.launch {
-                                            listState.animateScrollToItem(matchLineIndices[0])
+                                        LaunchedEffect(Unit) {
+                                            // no-op: guard to avoid lint; we scroll below via scope
                                         }
+                                        // scroll
+                                        val target = matchLineIndices[0]
+                                        LaunchedEffect(target) {}
+                                        // use scope for animate
+                                        scope.launch { listState.animateScrollToItem(target) }
                                     }
                                 },
                                 enabled = hasMatches
@@ -334,8 +327,7 @@ fun AllergenOCRApp() {
 
                     Spacer(Modifier.height(6.dp))
 
-                    // The text itself, one line per row, with highlights.
-                    // Focused line gets a subtle background to make it easy to spot.
+                    // Render lines with highlights; focused line tinted
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
@@ -345,21 +337,16 @@ fun AllergenOCRApp() {
                             .padding(12.dp)
                     ) {
                         itemsIndexed(lines) { idx, line ->
-                            val (annotated, _) = remember(line, regex) {
-                                highlightLine(line, regex)
-                            }
+                            val (annotated, _) = remember(line, regex) { highlightLine(line, regex) }
                             val isFocused =
                                 matchCount > 0 && idx == matchLineIndices.getOrNull(currentMatchIdx)
-                            val rowBg =
-                                if (isFocused) Color(0xFFFFF9C4) /* light yellow */ else Color.Transparent
+                            val rowBg = if (isFocused) Color(0xFFFFF9C4) else Color.Transparent
                             Box(
                                 Modifier
                                     .fillMaxWidth()
                                     .background(rowBg)
                                     .padding(vertical = 2.dp)
-                            ) {
-                                Text(annotated)
-                            }
+                            ) { Text(annotated) }
                         }
                     }
                 } ?: Text(
