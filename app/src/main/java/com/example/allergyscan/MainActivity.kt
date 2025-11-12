@@ -16,10 +16,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -77,9 +73,7 @@ fun AllergenOCRApp() {
 
     // Text editor mirrors persisted terms
     var termsText by remember { mutableStateOf("") }
-    LaunchedEffect(terms) {                  // <-- sync editor whenever persisted terms change
-        termsText = terms.joinToString("\n")
-    }
+    LaunchedEffect(terms) { termsText = terms.joinToString("\n") }
 
     // --- OCR/UI state ---
     var recognized by remember { mutableStateOf<Text?>(null) }
@@ -169,8 +163,8 @@ fun AllergenOCRApp() {
                     placeholder = { Text("barley\nbarley flour\nmalted barley\nbeer") },
                     singleLine = false,
                     minLines = 5,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                    keyboardActions = KeyboardActions.Default
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Default),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions.Default
                 )
                 Row(
                     Modifier
@@ -286,14 +280,9 @@ fun AllergenOCRApp() {
                                 onClick = {
                                     if (hasMatches) {
                                         currentMatchIdx = 0
-                                        LaunchedEffect(Unit) {
-                                            // no-op: guard to avoid lint; we scroll below via scope
+                                        scope.launch {
+                                            listState.animateScrollToItem(matchLineIndices[0])
                                         }
-                                        // scroll
-                                        val target = matchLineIndices[0]
-                                        LaunchedEffect(target) {}
-                                        // use scope for animate
-                                        scope.launch { listState.animateScrollToItem(target) }
                                     }
                                 },
                                 enabled = hasMatches
