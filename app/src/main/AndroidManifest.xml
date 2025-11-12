@@ -4,7 +4,7 @@
         android:name=".App"
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"
-        android:label="Allergy OCR"
+        android:label="Allergen OCR"
         android:supportsRtl="true"
         android:theme="@style/Theme.Material3.DayNight.NoActionBar">
         <activity
