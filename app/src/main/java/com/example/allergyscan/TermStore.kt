@@ -7,19 +7,20 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-private val Context.dataStore by preferencesDataStore(name = "allergy_terms")
+// Use applicationContext behind the scenes, safe across Activity lifecycles
+private val Context.dataStore by preferencesDataStore(name = "allergen_ocr_prefs")
 
 object TermStore {
-    private val KEY_TERMS = stringSetPreferencesKey("terms")
+    private val TERMS_KEY = stringSetPreferencesKey("terms_set")
 
     fun termsFlow(context: Context): Flow<Set<String>> =
-        context.dataStore.data.map { prefs ->
-            prefs[KEY_TERMS] ?: setOf("barley", "barley flour", "malted barley", "beer")
+        context.applicationContext.dataStore.data.map { prefs ->
+            prefs[TERMS_KEY] ?: emptySet()
         }
 
     suspend fun saveTerms(context: Context, terms: Set<String>) {
-        context.dataStore.edit { prefs ->
-            prefs[KEY_TERMS] = terms
+        context.applicationContext.dataStore.edit { prefs ->
+            prefs[TERMS_KEY] = terms
         }
     }
 }
