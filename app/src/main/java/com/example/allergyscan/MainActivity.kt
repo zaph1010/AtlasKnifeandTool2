@@ -34,6 +34,13 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.time.Instant
 import androidx.activity.result.PickVisualMediaRequest
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import java.io.File
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -86,6 +93,18 @@ fun AllergyOCRApp() {
             }
         }
     )
+val requestCameraPermission = rememberLauncherForActivityResult(
+    contract = RequestPermission(),
+    onResult = { granted ->
+        if (granted) {
+            val uri = createTempImageUri(context)
+            tempCaptureUri = uri
+            takePicture.launch(uri)
+        } else {
+            errorMessage = "Camera permission denied."
+        }
+    }
+)
 
     fun createImageUri(): Uri? {
         val resolver = context.contentResolver
@@ -97,6 +116,17 @@ fun AllergyOCRApp() {
         return resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
     }
 
+private fun createTempImageUri(context: android.content.Context): Uri {
+    val dir = File(context.cacheDir, "images").apply { mkdirs() }
+    val file = File.createTempFile("capture_", ".jpg", dir)
+    return FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+}
+
+    
     MaterialTheme {
         Scaffold(topBar = { TopAppBar(title = { Text("Allergy OCR (Prototype)") }) }) { padding ->
             Column(
@@ -140,15 +170,19 @@ fun AllergyOCRApp() {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
-                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    }) { Text("Pick photo") }
-                    Button(onClick = {
-                        val uri = createImageUri()
-                        if (uri != null) {
-                            tempCaptureUri = uri
-                            takePicture.launch(uri)
-                        }
-                    }) { Text("Take photo") }
+    val camPerm = Manifest.permission.CAMERA
+    val granted = ContextCompat.checkSelfPermission(context, camPerm) == PackageManager.PERMISSION_GRANTED
+    if (granted) {
+        val uri = createTempImageUri(context)
+        tempCaptureUri = uri
+        takePicture.launch(uri)
+    } else {
+        requestCameraPermission.launch(camPerm)
+    }
+}) {
+    Text("Take photo")
+}
+
                 }
 
                 Spacer(Modifier.height(12.dp))
