@@ -13,6 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -39,10 +42,6 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.io.File
-
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 
 // ---- File-scope helper: create a FileProvider-backed temp photo URI ----
 fun createTempImageUri(context: Context): Uri {
@@ -82,7 +81,7 @@ fun AllergenOCRApp() {
         }
     }
 
-    // --- OCR state ---
+    // --- OCR/UI state ---
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var recognized by remember { mutableStateOf<Text?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
@@ -97,7 +96,7 @@ fun AllergenOCRApp() {
                 runOcr(
                     uri,
                     onStart = { isProcessing = true; errorMessage = null },
-                    onDone = { isProcessing = false; recognized = it },
+                    onDone = { result -> isProcessing = false; recognized = result },
                     onError = { e -> isProcessing = false; errorMessage = e.message }
                 )
             }
@@ -115,7 +114,7 @@ fun AllergenOCRApp() {
                 runOcr(
                     uri,
                     onStart = { isProcessing = true; errorMessage = null },
-                    onDone = { isProcessing = false; recognized = it },
+                    onDone = { result -> isProcessing = false; recognized = result },
                     onError = { e -> isProcessing = false; errorMessage = e.message }
                 )
             }
@@ -200,7 +199,9 @@ fun AllergenOCRApp() {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
-                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        pickImage.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
                     }) { Text("Pick photo") }
 
                     Button(onClick = {
@@ -340,7 +341,7 @@ fun AllergenOCRApp() {
                             .padding(12.dp)
                     ) {
                         itemsIndexed(lines) { idx, line ->
-                            val (annotated, _) = remember(line, currentTerms) {
+                            val (annotated, _) = remember(line, regex) {
                                 highlightLine(line, regex)
                             }
                             val isFocused =
@@ -388,5 +389,33 @@ private fun highlightLine(line: String, regex: Regex?): Pair<AnnotatedString, In
     return out to count
 }
 
+// Run OCR with explicit callbacks (matches call sites)
 private fun runOcr(
-    u
+    uri: Uri,
+    onStart: () -> Unit,
+    onDone: (Text) -> Unit,
+    onError: (Throwable) -> Unit
+) {
+    onStart()
+    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    try {
+        val image = InputImage.fromFilePath(App.instance, uri)
+        recognizer.process(image)
+            .addOnSuccessListener { result -> onDone(result) }
+            .addOnFailureListener { e -> onError(e) }
+    } catch (e: Exception) {
+        onError(e)
+    }
+}
+
+// Application class so we have a safe Context for ML Kit file loading
+class App : android.app.Application() {
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+    companion object {
+        lateinit var instance: App
+            private set
+    }
+}
