@@ -137,7 +137,21 @@ fun AllergyOCRApp() {
     )
 
     MaterialTheme {
-        Scaffold(topBar = { TopAppBar(title = { Text("Allergy OCR (Prototype)") }) }) { padding ->
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text("Allergen OCR")
+                            Text(
+                                "1) Edit terms  2) Pick/Take photo  3) Matches are highlighted",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                )
+            }
+        ) { padding ->
             Column(
                 Modifier
                     .padding(padding)
@@ -145,7 +159,7 @@ fun AllergyOCRApp() {
                     .fillMaxSize()
             ) {
                 // ---- Text-based terms editor ----
-                Text("Allergy terms (one per line)", style = MaterialTheme.typography.titleMedium)
+                Text("Allergen terms (one per line)", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -222,7 +236,6 @@ fun AllergyOCRApp() {
                         highlightAndCount(recognizedStr, currentTerms)
                     }
 
-                    // Summary line (requested)
                     val summary = if (matchCount > 0) "Matches found: $matchCount" else "No matches"
                     Text(summary, style = MaterialTheme.typography.titleSmall)
 
