@@ -181,14 +181,18 @@ fun AllergenOCRApp() {
                         .padding(top = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Button(onClick = {
-                        val updated = termsText
-                            .lines()
-                            .map { it.trim() }
-                            .filter { it.isNotEmpty() }
-                            .toSet()
-                        scope.launch { TermStore.saveTerms(context, updated) }
-                    }) { Text("Save terms") }
+                   Button(onClick = {
+    val updated = termsText
+        .lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toSet()
+    // Update UI immediately
+    terms = updated
+    // Persist
+    scope.launch { TermStore.saveTerms(context, updated) }
+}) { Text("Save terms") }
+
 
                     OutlinedButton(onClick = {
                         termsText = ""
