@@ -33,6 +33,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.time.Instant
+import androidx.activity.result.PickVisualMediaRequest
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -139,7 +140,7 @@ fun AllergyOCRApp() {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {
-                        pickImage.launch(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     }) { Text("Pick photo") }
                     Button(onClick = {
                         val uri = createImageUri()
